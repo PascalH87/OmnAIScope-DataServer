@@ -67,7 +67,22 @@ To stop the measurement send the stop command to the websocket :
 {"type":"stop"}
 ```
 
-3.Save the measurement
+3.Record the measurement
+
+To start recording, the record command must be sent via websocket while the measurement is running
+```
+{"type":"record", "set":"start", format":"<format>"}
+```
+format: csv or json
+
+To stop recording, the record command must be sent via websocket while recording is in progress
+```
+{"type":"record","set":"stop"}
+```
+
+Download the file from the API endpoint : /download/Record/(filename)
+
+4.Save the measurement
 #### Documentation of saved files format can be found in docs\FileFormats 
 AFTER stopping the measurement send the save command to the websocket, it is important to send the same uuids as used for the measurement: 
 ```
@@ -77,7 +92,7 @@ AFTER stopping the measurement send the save command to the websocket, it is imp
 path: filename in which the file is saved 
 format: format in which the file is saved 
 
-Download the file from the API endpoint : /download/<filename>
+Download the file from the API endpoint : /download/(filename)
 
 ## How to build the project
 **Important: If you don't have access to the private communication submodule it is currently not possible to build this project locally. A CI Build is integrated for Linux that can be used in a fork** 
@@ -248,7 +263,7 @@ We set this for reproducibility reasons—everything then comes from the system 
 Clone the OmnAIScope-DataServer project from the repository:
 ```sh
 git clone git@github.com:omnai-project/OmnAIScope-DevDataServer.git --recurse-submodules
-cd OmnAIScope-DevDataServer
+cd OmnAIScope-DataServer
 cmake -B ./build/
 cmake --build ./build/
 ```
@@ -264,4 +279,7 @@ The executable can be copied standalone without further packaging.
 By following these steps, you should be able to successfully set up, build, and run the OmnAIScope-DataServer project. If you encounter any issues, ensure all dependencies are correctly installed and that your environment variables are properly configured.
 ---
 
+## Sequence diagram
+
+[Overview (SVG)](docs/images/Overview.svg)
 
