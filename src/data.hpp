@@ -24,6 +24,19 @@
 #include <cstddef>
 #include <filesystem>
 #include <ctime>
+#if defined(_WIN32)
+  #define NOMINMAX
+  #include <windows.h>
+#else
+  #include <sys/stat.h>
+  #include <sys/types.h>
+  #include <unistd.h>
+  #if defined(__linux__)
+    #include <sys/syscall.h>
+    #include <linux/stat.h>
+  #endif
+#endif
+
 
 namespace fs = std::filesystem;
 
@@ -279,6 +292,133 @@ inline std::string ensureSavePath(const std::string& desiredRaw, FormatType fmt)
 
     return p.string();
 }
+
+inline std::string humanSize(uintmax_t bytes) {
+    double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1) << mb;
+    std::string s = oss.str();
+    std::replace(s.begin(), s.end(), '.', ',');
+    return s + " MB";
+}
+
+inline std::tm local_tm(std::time_t t) {
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    return tm;
+}
+
+inline std::time_t to_time_t_fs(fs::file_time_type ftime) {
+    using namespace std::chrono;
+    auto sctp = time_point_cast<system_clock::duration>(
+        ftime - fs::file_time_type::clock::now() + system_clock::now()
+    );
+    return system_clock::to_time_t(sctp);
+}
+
+inline std::string humanCreated(std::time_t ts) {
+    auto now_t  = std::time(nullptr);
+    auto now_tm = local_tm(now_t);
+    auto tm     = local_tm(ts);
+
+    auto is_same_day = (now_tm.tm_year == tm.tm_year) &&
+                       (now_tm.tm_yday == tm.tm_yday);
+
+    if (is_same_day) {
+        std::ostringstream oss;
+        oss << "Today " << tm.tm_hour << ":" << std::setw(2) << std::setfill('0') << tm.tm_min;
+        return oss.str();
+    }
+
+    static const char* mon[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+    std::ostringstream oss;
+    oss << tm.tm_mday << "." << mon[tm.tm_mon] << " " << (tm.tm_year + 1900);
+    return oss.str();
+}
+
+inline nlohmann::json listDirAsJson(const std::string& dir) {
+    nlohmann::json arr = nlohmann::json::array();
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return arr;
+
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+
+        const auto p = entry.path();
+        const auto fname = p.filename().string();
+        const auto size  = static_cast<uintmax_t>(entry.file_size(ec));
+        if (ec) continue;
+
+        std::time_t t = to_time_t_fs(fs::last_write_time(p, ec));
+        if (ec) continue;
+
+        arr.push_back(nlohmann::json{
+            {"File",    fname},
+            {"Size",    humanSize(size)},
+            {"Created", humanCreated(t)}
+        });
+    }
+
+    return arr;
+}
+
+#if defined(_WIN32)
+inline std::time_t filetime_to_time_t(const FILETIME& ft) {
+    ULARGE_INTEGER ull;
+    ull.LowPart  = ft.dwLowDateTime;
+    ull.HighPart = ft.dwHighDateTime;
+
+    const unsigned long long WINDOWS_TICK = 10000000ULL;
+    const unsigned long long SEC_TO_UNIX_EPOCH = 11644473600ULL;
+    unsigned long long seconds = ull.QuadPart / WINDOWS_TICK;
+    if (seconds < SEC_TO_UNIX_EPOCH) return 0;
+    return static_cast<std::time_t>(seconds - SEC_TO_UNIX_EPOCH);
+}
+#endif
+
+inline std::optional<std::time_t> try_get_creation_time(const fs::path& p) {
+#if defined(_WIN32)
+    HANDLE h = CreateFileW(
+        p.wstring().c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr
+    );
+    if (h == INVALID_HANDLE_VALUE) return std::nullopt;
+
+    FILETIME c{}, a{}, m{};
+    BOOL ok = GetFileTime(h, &c, &a, &m);
+    CloseHandle(h);
+    if (!ok) return std::nullopt;
+    return filetime_to_time_t(c);
+
+#else
+  #if defined(__linux__)
+    struct statx sx{};
+    int rc = syscall(SYS_statx, AT_FDCWD, p.c_str(), AT_SYMLINK_NOFOLLOW, STATX_BTIME, &sx);
+    if (rc == 0 && (sx.stx_mask & STATX_BTIME)) {
+        return static_cast<std::time_t>(sx.stx_btime.tv_sec);
+    }
+  #endif
+    return std::nullopt;
+#endif
+}
+
+inline std::time_t best_created_or_modified(const fs::path& p) {
+    if (auto ct = try_get_creation_time(p)) return *ct;
+
+    std::error_code ec;
+    auto ft = fs::last_write_time(p, ec);
+    if (ec) return std::time_t{}; 
+
+    return to_time_t_fs(ft);
+}
+
 
 // CLASSES/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /**
@@ -1795,6 +1935,22 @@ void StartWS(int &port, ControlWriter &controlWriter)
     		res.body = std::move(body);
     		return res;
     });
+
+    CROW_ROUTE(crowApp, "/show_measurements")
+	([]() {
+    		nlohmann::json out = nlohmann::json::array();
+
+    		nlohmann::json rec = nlohmann::json::object();
+    		rec["Record"] = listDirAsJson("Record");
+    		out.push_back(rec);
+
+    		nlohmann::json sav = nlohmann::json::object();
+    		sav["Save"] = listDirAsJson("Save");
+    		out.push_back(sav);
+
+    		return crow::response(out.dump());
+    });
+
 
     /**
      * @brief websocket endpoint to receive measurement data from devices
