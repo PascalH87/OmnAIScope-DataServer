@@ -102,7 +102,8 @@ int main(int argc, char **argv) {
             if(isJson) {
                 format = FormatType::JSON;
             }
-            auto measurement = std::make_shared<Measurement>(startUUID, filePath, 10000, format, destination);
+	    std::string out = ensureSavePath(filePath, format);
+            auto measurement = std::make_shared<Measurement>(startUUID, out, 10000, format, destination);
             measurement->startLocal(controlWriter);
         }
     }

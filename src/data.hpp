@@ -245,6 +245,29 @@ inline std::string asFinalFromTmp(const std::string& tmpPath, FormatType fmt) {
     return base + finalExtFor(fmt);
 }
 
+inline std::string ensureDir(const std::string& dir) {
+    fs::create_directories(dir); 		      // idempotent
+    return dir;
+}
+
+inline std::string ensureSavePath(const std::string& desired, FormatType fmt) {
+    ensureDir("Save");
+
+    if (desired.empty()) {
+        return (fs::path("Save") / (makeTimestampYYMMDD_HHMM() + finalExtFor(fmt))).string();
+    }
+
+    fs::path p(desired);
+
+    if (!p.has_parent_path()) {
+        return (fs::path("Save") / p).string();
+    }
+
+    fs::create_directories(p.parent_path());
+    return p.string();
+}
+
+
 // CLASSES/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /**
  * @brief Transform data map std::map<Omniscope::Id, std::vector<std::pair<double,double>>> to std::queue<sample_T>
@@ -1538,7 +1561,9 @@ void saveMeasurement(Command &cmd, ControlWriter& ctrl, WSContext& wsCtx){
     wsCtx.currentMeasurement->format = cmd.saveMetaData.format; 
     wsCtx.currentMeasurement->samplingRate = cmd.saveMetaData.samplingRate; 
     wsCtx.currentMeasurement->uuids = cmd.saveMetaData.uuids; 
-    wsCtx.currentMeasurement->filePath = cmd.saveMetaData.filepath; 
+    std::string normalized = ensureSavePath(cmd.saveMetaData.filepath, cmd.saveMetaData.format);
+    wsCtx.currentMeasurement->filePath = normalized;
+    cmd.saveMetaData.filepath = normalized;
     ctrl.saveData(wsCtx);
 
     while(!saveDataQueue.empty()){
@@ -1637,7 +1662,7 @@ void workOnCommands(std::stop_token stop_token, ControlWriter &controlWriter ){
                 else saveMeasurement(cmd, controlWriter, wsCtx);
 	       	wsCtx.currentMeasurement.reset();
 		controlWriter.stopWriter();
-                cmd.conn->send_text(nlohmann::json{ {"type","file-ready"},{"url","/download/" + cmd.saveMetaData.filepath}}.dump());
+		cmd.conn->send_text(nlohmann::json{ {"type","file-ready"},{"url","/download/" + cmd.saveMetaData.filepath}}.dump());
                 break; 
             }
 	    case CmdType::RECORD:{
@@ -1732,22 +1757,31 @@ void StartWS(int &port, ControlWriter &controlWriter)
     });
 
     CROW_ROUTE(crowApp, "/download/<path>")
-    ([](const std::string& fname) {
- 	if (fname.find("..") != std::string::npos) return crow::response(400);
-        std::ifstream f(fname, std::ios::binary);
-        if (!f) return crow::response(404);
+	([](const std::string& fname) {
+    		if (fname.find("..") != std::string::npos) return crow::response(400);
 
-        std::string body{ std::istreambuf_iterator<char>(f),
-                        std::istreambuf_iterator<char>() };
+    		fs::path p = fs::path(fname).lexically_normal();
 
-        crow::response res;
-        res.code = 200;
-        res.set_header("Content-Type", "text/plain");
-	std::string base = std::filesystem::path(fname).filename().string();
-        res.set_header("Content-Disposition",
-                    "attachment; filename=\"" + base + "\"");
-        res.body = std::move(body);
-        return res;                                   
+    		if (p.is_absolute()) return crow::response(400);
+
+    		const std::string s = p.generic_string();
+    		auto allowed = (s.rfind("Save/",   0) == 0) || (s == "Save") ||
+                   	       (s.rfind("Record/", 0) == 0) || (s == "Record");
+    		if (!allowed) return crow::response(403);
+
+    		std::ifstream f(p, std::ios::binary);
+    		if (!f) return crow::response(404);
+
+    		std::string body{ std::istreambuf_iterator<char>(f),
+                      		  std::istreambuf_iterator<char>() };
+
+    		crow::response res;
+    		res.code = 200;
+    		res.set_header("Content-Type", "application/octet-stream");
+    		std::string base = p.filename().string();
+    		res.set_header("Content-Disposition", "attachment; filename=\"" + base + "\"");
+    		res.body = std::move(body);
+    		return res;
     });
 
     /**
