@@ -245,28 +245,40 @@ inline std::string asFinalFromTmp(const std::string& tmpPath, FormatType fmt) {
     return base + finalExtFor(fmt);
 }
 
+inline bool isBlank(const std::string& s) {
+    return std::all_of(s.begin(), s.end(),
+        [](unsigned char c){ return std::isspace(c) != 0; });
+}
+
 inline std::string ensureDir(const std::string& dir) {
     fs::create_directories(dir); 		      // idempotent
     return dir;
 }
 
-inline std::string ensureSavePath(const std::string& desired, FormatType fmt) {
+inline std::string ensureSavePath(const std::string& desiredRaw, FormatType fmt) {
     ensureDir("Save");
 
-    if (desired.empty()) {
-        return (fs::path("Save") / (makeTimestampYYMMDD_HHMM() + finalExtFor(fmt))).string();
+    const bool noName = desiredRaw.empty() || isBlank(desiredRaw);
+
+    if (noName || desiredRaw.back() == '/' || desiredRaw.back() == '\\') {
+        fs::path dir = noName ? fs::path("Save") : fs::path(desiredRaw);
+        fs::create_directories(dir);
+        fs::path full = dir / makeTimestampYYMMDD_HHMM(); 
+        return (full.string() + finalExtFor(fmt));    
     }
 
-    fs::path p(desired);
+    fs::path p(desiredRaw);
 
     if (!p.has_parent_path()) {
-        return (fs::path("Save") / p).string();
+        p = fs::path("Save") / p;
     }
 
     fs::create_directories(p.parent_path());
+
+    p.replace_extension(finalExtFor(fmt));
+
     return p.string();
 }
-
 
 // CLASSES/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /**
