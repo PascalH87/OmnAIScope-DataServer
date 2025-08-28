@@ -14,14 +14,15 @@ The OmnAIScope-DataServer can be executed via the command line on Windows, Linux
 
 The CLI-Tool includes the commands: 
 
--h, --help Displays a help message with detailed usage instructions in the console.
--s, --search Lists the UUIDs of all connected devices, displaying their current LED color for easy identification.
--d, --device, --dev Initiates a measurement session for specified devices by their UUIDs. Multiple devices can be specified, and their data will be displayed directly in the console. 
--o, --output Writes the data from the selected devices to the specified file path. By default, the data is saved in .csv format.
--j, --json Changes the output file format to JSON. 
--w, --websocket Opens a Websocket, as well as a REST API. 
--p, --port Set a port for the Websocket to start on. 
--v, --verbose Prints out additional information about the software's process.
+-h, --help Displays a help message with detailed usage instructions in the console.<br>
+-s, --search Lists the UUIDs of all connected devices, displaying their current LED color for easy identification.<br>
+-d, --device, --dev Initiates a measurement session for specified devices by their UUIDs. Multiple devices can be specified, and their data will be displayed directly in the console.<br> 
+-o, --output Writes the data from the selected devices to the specified file path. By default, the data is saved in .csv format.<br>
+-j, --json Changes the output file format to JSON.<br> 
+-w, --websocket Opens a Websocket, as well as a REST API.<br> 
+-p, --port Set a port for the Websocket to start on.<br> 
+-v, --verbose Prints out additional information about the software's process.<br>
+-b, --buffer-size Set save-buffer size in MiB (10-1000)<br>
 --version Prints out the current SW version 
 
 #### How to use the Websocket: 
@@ -29,7 +30,7 @@ The CLI-Tool includes the commands:
 1. Start the Websocket 
 Start the executable via 
    ```
-   .\OmnAIScopeBackend -w -p <port>
+   .\OmnAIScope-DataServer -w -p <port>
    ```
 1. Retrieve UUIDS via REST API 
 Request the available UUIDs by accessing the REST API endpoint:
@@ -80,7 +81,7 @@ To stop recording, the record command must be sent via websocket while recording
 {"type":"record","set":"stop"}
 ```
 
-Download the file from the API endpoint : /download/Record/(filename)
+Download the file from the API endpoint : /download/Record/&lt;filename&gt;
 
 4.Save the measurement
 #### Documentation of saved files format can be found in docs\FileFormats 
@@ -92,7 +93,7 @@ AFTER stopping the measurement send the save command to the websocket, it is imp
 path: filename in which the file is saved 
 format: format in which the file is saved 
 
-Download the file from the API endpoint : /download/(filename)
+Download the file from the API endpoint : /download/Save/&lt;filename&gt;
 
 ## How to build the project
 **Important: If you don't have access to the private communication submodule it is currently not possible to build this project locally. A CI Build is integrated for Linux that can be used in a fork** 
@@ -183,7 +184,7 @@ If you know how to configure paths and toolchain files manually, `vcpkg` can als
 
 ### 7. Generate the Build System with CMake
 
-1. Return to the root project directory (e.g., `OmnAIScopeBackend`):
+1. Return to the root project directory (e.g., `OmnAIScope-DataServer`):
    ```cmd
    cd ..
    ```
@@ -201,7 +202,7 @@ If you know how to configure paths and toolchain files manually, `vcpkg` can als
    ```cmd
    cmake --build build --config Release
    ```
-   This will compile the source code and generate the `OmnAIScopeBackend.exe` file in the `build/Release` directory.
+   This will compile the source code and generate the `OmnAIScope-DataServer.exe` file in the `build/Release` directory.
 
 ---
 
@@ -213,7 +214,7 @@ If you know how to configure paths and toolchain files manually, `vcpkg` can als
    ```
 1. Run the program:
    ```cmd
-   .\OmnAIScopeBackend.exe
+   .\OmnAIScope-DataServer.exe
    ```
 
 The program should start, and you can interact with it as instructed.
@@ -262,7 +263,7 @@ We set this for reproducibility reasons—everything then comes from the system 
 
 Clone the OmnAIScope-DataServer project from the repository:
 ```sh
-git clone git@github.com:omnai-project/OmnAIScope-DevDataServer.git --recurse-submodules
+git clone git@github.com:omnai-project/OmnAIScope-DataServer.git --recurse-submodules
 cd OmnAIScope-DataServer
 cmake -B ./build/
 cmake --build ./build/
@@ -271,7 +272,7 @@ cmake --build ./build/
 You can start the data-server with 
 
 ```sh
-   .build/OmnAIScopeBackend
+   .build/OmnAIScope-DataServer
 ``` 
 
 The executable can be copied standalone without further packaging. 
