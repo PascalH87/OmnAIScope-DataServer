@@ -1951,6 +1951,69 @@ void StartWS(int &port, ControlWriter &controlWriter)
     		return crow::response(out.dump());
     });
 
+    CROW_ROUTE(crowApp, "/delete_measurements/<string>/<string>")
+	.methods("DELETE"_method)
+	([](const std::string& folder, const std::string& filename) {
+    		if (folder != "Save" && folder != "Record") {
+        		return crow::response(400, R"({"error":"folder must be 'Save' or 'Record'"})");
+    		}
+
+    		if (filename.empty()
+        	 || filename.find("..") != std::string::npos
+        	 || filename.find('/')  != std::string::npos
+        	 || filename.find('\\') != std::string::npos) {
+       	 		return crow::response(400, R"({"error":"invalid filename"})");
+    		}
+
+    		fs::path p = fs::path(folder) / filename;
+
+    		std::error_code ec;
+		if (!fs::exists(p, ec) || !fs::is_regular_file(p, ec)) {
+    			nlohmann::json err = {
+        			{"status", "error"},
+        			{"error", "file not found"},
+        			{"path", folder + "/" + filename}
+    			};
+    		auto r = crow::response(404, err.dump());
+    		r.set_header("Content-Type", "application/json");
+    		return r;
+		}
+
+		#if defined(SECURE_DELETE)
+    		{
+        		std::ifstream in(p, std::ios::binary | std::ios::ate);
+        		if (!in) return crow::response(500, R"({"error":"open for wipe failed"})");
+        		std::streamsize sz = in.tellg();
+        		in.close();
+
+       			std::vector<char> zeros(64 * 1024, 0);
+        		std::ofstream out(p, std::ios::binary | std::ios::in | std::ios::out);
+        		if (!out) return crow::response(500, R"({"error":"open for wipe failed"})");
+
+       			std::streamsize written = 0;
+        		while (written < sz) {
+            			auto chunk = std::min<std::streamsize>(sz - written, (std::streamsize)zeros.size());
+            			out.write(zeros.data(), chunk);
+            			if (!out) return crow::response(500, R"({"error":"wipe failed"})");
+            			written += chunk;
+        		}
+        		out.flush();
+        		out.close();
+    		}
+		#endif
+
+    		fs::remove(p, ec);
+    		if (ec) {
+        		return crow::response(500, R"({"error":"delete failed"})");
+    		}
+
+    		nlohmann::json ok = {
+        		{"status","ok"},
+        		{"deleted", folder + "/" + filename}
+    		};
+    		return crow::response(ok.dump());
+    });
+
 
     /**
      * @brief websocket endpoint to receive measurement data from devices
