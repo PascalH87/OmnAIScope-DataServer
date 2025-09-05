@@ -24,6 +24,9 @@
 #include <cstddef>
 #include <filesystem>
 #include <ctime>
+#include <regex>
+#include <cstdlib>
+#include <string>
 #if defined(_WIN32)
   #define NOMINMAX
   #include <windows.h>
@@ -419,6 +422,70 @@ inline std::time_t best_created_or_modified(const fs::path& p) {
     return to_time_t_fs(ft);
 }
 
+namespace {
+    inline std::string to_lower(std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        return s;
+    }
+
+    inline bool in_allowed_folder(const std::string& folder) {
+        return folder == "Save" || folder == "Record";
+    }
+
+    inline bool is_valid_filename(const std::string& name) {
+        static const std::regex re(R"(^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$)");
+        if (!std::regex_match(name, re)) return false;
+        fs::path p{name};
+        return p.has_filename() && p.parent_path().empty();
+    }
+
+    inline bool has_allowed_ext(const fs::path& p) {
+        auto e = to_lower(p.extension().string());
+        return (e == ".csv" || e == ".json" || e == ".dat");
+    }
+
+    inline bool has_delete_permission(const crow::request& req, const std::string&) {
+    	const std::string auth = req.get_header_value("Authorization");
+    	if (auth.empty()) return false;
+
+    	const char* env = std::getenv("DELETE_TOKEN");
+    	const std::string expected = std::string("Bearer ") + (env ? std::string(env) : "OmnAI");
+
+    	if (auth.size() != expected.size()) return false;
+
+    	volatile unsigned char diff = 0;
+    	for (size_t i = 0; i < auth.size(); ++i) diff |= (unsigned char)(auth[i] ^ expected[i]);
+    	return diff == 0;
+    }
+
+    inline bool set_env_delete_token(const std::string& token, bool overwrite = true) {
+	#if defined(_WIN32)
+    		if (!overwrite) {
+        		if (const char* cur = std::getenv("DELETE_TOKEN")) return true;
+    		}
+    		return _putenv_s("DELETE_TOKEN", token.c_str()) == 0;
+	#else
+    		return ::setenv("DELETE_TOKEN", token.c_str(), overwrite ? 1 : 0) == 0;
+	#endif
+    }
+
+    inline const char* get_env_delete_token() {
+    	return std::getenv("DELETE_TOKEN");
+    }
+
+    inline crow::response json_error(int code, std::string msg) {
+        crow::response r{code, nlohmann::json({{"status","error"},{"error",std::move(msg)}}).dump()};
+        r.set_header("Content-Type", "application/json");
+        return r;
+    }
+
+    inline crow::response json_ok(nlohmann::json j) {
+        crow::response r{200, j.dump()};
+        r.set_header("Content-Type", "application/json");
+        return r;
+    }
+}
 
 // CLASSES/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /**
@@ -1952,68 +2019,87 @@ void StartWS(int &port, ControlWriter &controlWriter)
     });
 
     CROW_ROUTE(crowApp, "/delete_measurements/<string>/<string>")
-	.methods("DELETE"_method)
-	([](const std::string& folder, const std::string& filename) {
-    		if (folder != "Save" && folder != "Record") {
-        		return crow::response(400, R"({"error":"folder must be 'Save' or 'Record'"})");
-    		}
+    	.methods("DELETE"_method)
+    	([](const crow::request& req, const std::string& folder, const std::string& filename) {
 
-    		if (filename.empty()
-        	 || filename.find("..") != std::string::npos
-        	 || filename.find('/')  != std::string::npos
-        	 || filename.find('\\') != std::string::npos) {
-       	 		return crow::response(400, R"({"error":"invalid filename"})");
-    		}
+           	// Folder Whitelist
+        	if (!in_allowed_folder(folder)) {
+           		return json_error(400, "folder must be 'Save' or 'Record'");
+        	}
 
-    		fs::path p = fs::path(folder) / filename;
+        	// Permission Check
+        	if (!has_delete_permission(req, folder)) {
+            		return json_error(403, "forbidden");
+        	}
 
-    		std::error_code ec;
-		if (!fs::exists(p, ec) || !fs::is_regular_file(p, ec)) {
-    			nlohmann::json err = {
-        			{"status", "error"},
-        			{"error", "file not found"},
-        			{"path", folder + "/" + filename}
-    			};
-    		auto r = crow::response(404, err.dump());
-    		r.set_header("Content-Type", "application/json");
-    		return r;
-		}
+        	// File name whitelist (no paths / no hidden files / fixed length)
+        	if (!is_valid_filename(filename)) {
+            		return json_error(400, "invalid filename");
+        	}
 
-		#if defined(SECURE_DELETE)
-    		{
-        		std::ifstream in(p, std::ios::binary | std::ios::ate);
-        		if (!in) return crow::response(500, R"({"error":"open for wipe failed"})");
-        		std::streamsize sz = in.tellg();
-        		in.close();
+        	// permitted extensions
+        	if (!has_allowed_ext(filename)) {
+            		return json_error(400, "invalid extension");
+        	}
 
-       			std::vector<char> zeros(64 * 1024, 0);
-        		std::ofstream out(p, std::ios::binary | std::ios::in | std::ios::out);
-        		if (!out) return crow::response(500, R"({"error":"open for wipe failed"})");
+          	//  Existence and type check: Resolve paths securely and ensure that we delete in the folder
+        	std::error_code ec;
+        	fs::path base = fs::weakly_canonical(fs::path(folder), ec);
+        	if (ec) return json_error(500, "canonicalize base failed");
 
-       			std::streamsize written = 0;
-        		while (written < sz) {
-            			auto chunk = std::min<std::streamsize>(sz - written, (std::streamsize)zeros.size());
-            			out.write(zeros.data(), chunk);
-            			if (!out) return crow::response(500, R"({"error":"wipe failed"})");
-            			written += chunk;
-        		}
-        		out.flush();
-        		out.close();
-    		}
-		#endif
+        	fs::path target_rel = fs::path(filename);
+        	fs::path target     = fs::weakly_canonical(base / target_rel, ec);
+        	if (ec) return json_error(500, "canonicalize target failed");
 
-    		fs::remove(p, ec);
-    		if (ec) {
-        		return crow::response(500, R"({"error":"delete failed"})");
-    		}
+       		if (target.parent_path() != base) {
+            		return json_error(400, "target must be a file directly in the folder");
+        	}
 
-    		nlohmann::json ok = {
-        		{"status","ok"},
-        		{"deleted", folder + "/" + filename}
-    		};
-    		return crow::response(ok.dump());
+        	//  Existence and type check
+        	if (!fs::exists(target, ec) || !fs::is_regular_file(target, ec)) {
+            		nlohmann::json err = {
+                		{"status","error"},
+                		{"error","file not found"},
+                		{"path", (base / filename).generic_string()}
+            		};
+            		crow::response r{404, err.dump()};
+            		r.set_header("Content-Type", "application/json");
+            		return r;
+        	}
+
+        	// Secure Wipe
+        	#if defined(SECURE_DELETE)
+        	{
+            		std::ifstream in(target, std::ios::binary | std::ios::ate);
+            		if (!in) return json_error(500, "open for wipe failed");
+            		std::streamsize sz = in.tellg();
+            		in.close();
+
+            		std::vector<char> zeros(64 * 1024, 0);
+            		std::ofstream out(target, std::ios::binary | std::ios::in | std::ios::out);
+            		if (!out) return json_error(500, "open for wipe failed");
+
+            		std::streamsize written = 0;
+            		while (written < sz) {
+                		auto chunk = std::min<std::streamsize>(sz - written, (std::streamsize)zeros.size());
+                		out.write(zeros.data(), chunk);
+                		if (!out) return json_error(500, "wipe failed");
+                		written += chunk;
+            		}
+            		out.flush();
+            		out.close();
+        	}
+        	#endif
+
+        	// Delete
+        	fs::remove(target, ec);
+        	if (ec) return json_error(500, "delete failed");
+
+        	return json_ok({
+            		{"status","ok"},
+            		{"deleted", (base.filename() / fs::path(filename)).generic_string()}
+        	});
     });
-
 
     /**
      * @brief websocket endpoint to receive measurement data from devices

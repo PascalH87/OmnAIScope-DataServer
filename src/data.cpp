@@ -45,6 +45,9 @@ int main(int argc, char **argv) {
     int bufferSizeMB = -1;
     app.add_option("-b, --buffer-size", bufferSizeMB, "Set save-buffer size in MiB (10–1000)");
 
+    std::string delTokenCli;
+    app.add_option("-t, --delete-token", delTokenCli, "Set DELETE_TOKEN at startup");
+
     if (argc <= 1) {// if no parameters are given
         std::cout << app.help() << std::endl;
         return 0;
@@ -55,6 +58,18 @@ int main(int argc, char **argv) {
         // if input is incorrect
         std::cerr << app.help() << std::endl;
         return app.exit(e);
+    }
+
+    const char* already = get_env_delete_token();
+
+    if (!delTokenCli.empty()) {
+        set_env_delete_token(delTokenCli, true);
+    } else if (!already) {
+        set_env_delete_token("OmnAI", false);
+    }
+
+    if (const char* tok = get_env_delete_token()) {
+        std::cout << "[INFO] DELETE_TOKEN = " << tok << std::endl;
     }
 
     if (bufferSizeMB != -1) {
