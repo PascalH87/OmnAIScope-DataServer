@@ -445,35 +445,6 @@ namespace {
         return (e == ".csv" || e == ".json" || e == ".dat");
     }
 
-    inline bool has_delete_permission(const crow::request& req, const std::string&) {
-    	const std::string auth = req.get_header_value("Authorization");
-    	if (auth.empty()) return false;
-
-    	const char* env = std::getenv("DELETE_TOKEN");
-    	const std::string expected = std::string("Bearer ") + (env ? std::string(env) : "OmnAI");
-
-    	if (auth.size() != expected.size()) return false;
-
-    	volatile unsigned char diff = 0;
-    	for (size_t i = 0; i < auth.size(); ++i) diff |= (unsigned char)(auth[i] ^ expected[i]);
-    	return diff == 0;
-    }
-
-    inline bool set_env_delete_token(const std::string& token, bool overwrite = true) {
-	#if defined(_WIN32)
-    		if (!overwrite) {
-        		if (const char* cur = std::getenv("DELETE_TOKEN")) return true;
-    		}
-    		return _putenv_s("DELETE_TOKEN", token.c_str()) == 0;
-	#else
-    		return ::setenv("DELETE_TOKEN", token.c_str(), overwrite ? 1 : 0) == 0;
-	#endif
-    }
-
-    inline const char* get_env_delete_token() {
-    	return std::getenv("DELETE_TOKEN");
-    }
-
     inline crow::response json_error(int code, std::string msg) {
         crow::response r{code, nlohmann::json({{"status","error"},{"error",std::move(msg)}}).dump()};
         r.set_header("Content-Type", "application/json");
@@ -1934,7 +1905,7 @@ void StartWS(int &port, ControlWriter &controlWriter)
     cors
     .global()
     .origin("*")
-    .headers("Origin", "Content-Type", "Accept", "X-Custom-Header", "Authorization")
+    .headers("Origin", "Content-Type", "Accept", "X-Custom-Header")
     .methods("POST"_method, "GET"_method, "OPTIONS"_method)
     .max_age(600);
 
@@ -2025,11 +1996,6 @@ void StartWS(int &port, ControlWriter &controlWriter)
            	// Folder Whitelist
         	if (!in_allowed_folder(folder)) {
            		return json_error(400, "folder must be 'Save' or 'Record'");
-        	}
-
-        	// Permission Check
-        	if (!has_delete_permission(req, folder)) {
-            		return json_error(403, "forbidden");
         	}
 
         	// File name whitelist (no paths / no hidden files / fixed length)
